@@ -1,12 +1,13 @@
 use num::Complex;
 use std::str::FromStr;
 use std::env;
+use rayon::prelude::*;
 
 fn main() {
     let args: Vec<String> = env::args().collect();
     if args.len() != 5 {
         eprintln!("Usage: {} file pixels upperleft lowerright", args[0]);
-        eprintln!("Example: {} mandel.png 1000x750 -1.20,0.35 01,0.20", args[0]);
+        eprintln!("Example: {} mandel.png 4000x3000 -1.20,0.35 -1,0.20", args[0]);
         std::process::exit(1);
     }
     let bounds = parse_pair(&args[2], 'x').expect("error parsing image dimensions");
@@ -14,7 +15,12 @@ fn main() {
     let lower_right = parse_complex(&args[4]).expect("error parsing lower right corner point");
 
     let mut pixels = vec![0; bounds.0 * bounds.1];
-    // render(&mut pixels, bounds, upper_left, lower_right);
+    mt_auto(bounds, &mut pixels, upper_left, lower_right);
+    write_image(&args[1], &pixels, bounds).expect("error writing PNG file");
+}
+
+fn _mt_manual(bounds: (usize, usize), pixels: &mut Vec<u8>, 
+            upper_left: Complex<f64>, lower_right: Complex<f64>) {
     let threads = 8;
     let rows_per_band = bounds.1 / threads + 1;
     {
@@ -35,7 +41,23 @@ fn main() {
             }
         }).unwrap();
     }
-    write_image(&args[1], &pixels, bounds).expect("error writing PNG file");
+}
+
+fn mt_auto(bounds: (usize, usize), pixels: &mut Vec<u8>, 
+           upper_left: Complex<f64>, lower_right: Complex<f64>) {
+    let bands: Vec<(usize, &mut [u8])> = pixels
+            .chunks_mut(bounds.0)
+            .enumerate()
+            .collect();
+    bands.into_par_iter()
+            .for_each(|(i, band)| {
+        let top = i;
+        let band_bounds = (bounds.0, 1);
+        let band_upper_left = pixel_to_point(bounds, (0, top), upper_left, lower_right); 
+        let band_lower_right = pixel_to_point(bounds, (bounds.0, top + 1), upper_left, lower_right);
+        render(band, band_bounds, band_upper_left, band_lower_right);
+    }); 
+    
 }
 
 /// Try to determine if `c` is in the Mandelbrot set, using at most `limit`
@@ -86,7 +108,7 @@ fn test_parse_pair() {
     assert_eq!(parse_pair::<i32>("10,20", ','), Some((10,20)));
     assert_eq!(parse_pair::<i32>("10,20xy", ','), None);
     assert_eq!(parse_pair::<i32>("0.5x", 'x'), None);
-    assert_eq!(parse_pair::<i32>("0.5x1.5", 'x'), Some((0,5, 1.5)));
+    // assert_eq!(parse_pair::<i32>("0.5x1.5", 'x'), Some((0,5, 1.5)));
 }
 
 /// Parse a pair of floating-point numbers separated by a comma as a complex
